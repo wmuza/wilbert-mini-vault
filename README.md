@@ -235,4 +235,17 @@ would look like "the counter is slow" rather than "the counter is cached."
 
 **Presigned URLs have a hostname trap.** MinIO can hand out temporary direct-download
 URLs, but if the API generates one inside Docker it will contain `minio:9000`, which a
-browser on your host cannot resolve. This demo streams download
+browser on your host cannot resolve. This demo streams downloads through the API
+instead; the fix in production is setting a public endpoint for URL signing.
+
+**Cache invalidation is a choice.** This app deletes the cached listing on every write
+(simple, always correct) and also sets a TTL as a safety net. Alternatives like
+write-through or per-item caching trade complexity for hit rate.
+
+## Ideas to extend it
+
+Add auth (API keys or JWT), swap `create_all` for Alembic migrations, generate presigned
+upload URLs so big files bypass the API, add a background worker (e.g. thumbnail
+generation through a Redis queue), or rate-limit uploads per client with Redis `INCR`
+plus `EXPIRE`. Each one deepens exactly one service without touching the others, which
+is the point of keeping the layers separate.
