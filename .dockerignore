@@ -1,0 +1,11 @@
+__pycache__
+*.pyc
+.env
+.git
+
+# The frontend source IS needed: the image builds it in a Node stage.
+# Only the products of a local `npm install` / `npm run build` are excluded,
+# so a developer's host build never leaks into the image.
+frontend/node_modules
+frontend/dist
+frontend/.angular

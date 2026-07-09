@@ -1,0 +1,435 @@
+<div class="bg-glow" aria-hidden="true"></div>
+
+<main>
+  <!-- ── Header ─────────────────────────────────────────────────────── -->
+  <header class="top">
+    <div class="brand">
+      <div class="mark" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="4" />
+          <circle cx="12" cy="12" r="4.2" />
+          <path d="M12 9.5v2.5l1.8 1.2" />
+        </svg>
+      </div>
+      <div>
+        <h1>Mini <span class="thin">Vault</span></h1>
+        <p class="sub">
+          <b class="fa">FastAPI</b> · <b class="pg">PostgreSQL</b> ·
+          <b class="mi">MinIO</b> · <b class="rd">Redis</b>
+        </p>
+      </div>
+    </div>
+
+    <div class="health" role="status" aria-label="Service health">
+      @if (health(); as h) {
+        @for (svc of h.services | keyvalue; track svc.key) {
+          <span class="pill" [class.ok]="svc.value === 'ok'" [class.bad]="svc.value !== 'ok'">
+            <span class="dot"></span>{{ svc.key }}
+          </span>
+        }
+      } @else {
+        <span class="pill"><span class="dot"></span>checking services…</span>
+      }
+    </div>
+  </header>
+
+  <!-- ── KPI row ────────────────────────────────────────────────────── -->
+  <section class="stats" aria-label="Headline numbers">
+    <div class="stat">
+      <span class="stat-label">Files stored</span>
+      <span class="stat-value">{{ files().length }}</span>
+      <span class="stat-sub">{{ formatBytes(totalBytes()) }} held in MinIO</span>
+    </div>
+
+    <div class="stat">
+      <span class="stat-label">Downloads served</span>
+      <span class="stat-value">{{ formatNum(metrics()?.downloads?.total ?? 0) }}</span>
+      @if (metrics(); as m) {
+        <span class="stat-sub">
+          @if (m.downloads.pending_flush > 0) {
+            <span class="dot-live" aria-hidden="true"></span>
+            {{ m.downloads.pending_flush }} awaiting flush to Postgres
+          } @else {
+            all counters mirrored to Postgres
+          }
+        </span>
+      }
+    </div>
+
+    <div class="stat">
+      <span class="stat-label">Cache hit rate</span>
+      <span class="stat-value">{{ hitRatePct() }}<span class="unit">%</span></span>
+      <!-- Meter, not a 2-slice pie: one ratio against a limit. Track is a
+           darker step of the fill's own ramp so state reads across the bar. -->
+      <div class="meter" role="img"
+           [attr.aria-label]="'Cache hit rate ' + hitRatePct() + ' percent'">
+        <div class="meter-fill" [style.width.%]="hitRatePct()"></div>
+      </div>
+      @if (metrics(); as m) {
+        <span class="stat-sub">{{ m.cache.hits }} hits · {{ m.cache.misses }} misses</span>
+      }
+    </div>
+
+    <div class="stat">
+      <span class="stat-label">Last list served by</span>
+      @if (source(); as src) {
+        <span class="stat-value src">
+          <span class="src-dot" [class.postgres]="src === 'postgres'" [class.cache]="src === 'redis-cache'"></span>
+          {{ src === 'redis-cache' ? 'Redis cache' : 'PostgreSQL' }}
+        </span>
+        <span class="stat-sub">
+          @if (src === 'redis-cache') {
+            @if (metrics(); as m) {
+              cache hit — expires in {{ m.cache.listing_ttl_remaining }}s
+            } @else {
+              cache hit
+            }
+          } @else {
+            cache miss — refresh now for a Redis hit
+          }
+        </span>
+      } @else {
+        <span class="stat-value src">…</span>
+      }
+    </div>
+  </section>
+
+  <!-- ── Dropzone ───────────────────────────────────────────────────── -->
+  <section
+    class="dropzone"
+    [class.dragover]="dragOver()"
+    [class.busy]="busy()"
+    tabindex="0"
+    role="button"
+    aria-label="Upload a file"
+    (click)="fileInput.click()"
+    (keydown.enter)="fileInput.click()"
+    (dragover)="onDragOver($event)"
+    (dragleave)="dragOver.set(false)"
+    (drop)="onDrop($event)"
+  >
+    <input #fileInput type="file" hidden (change)="onPick($event)" />
+    <div class="dz-icon" aria-hidden="true">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 16V5m0 0l-4 4m4-4l4 4" />
+        <path d="M4 17v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1" />
+      </svg>
+    </div>
+    @if (busy()) {
+      <p class="dz-title">Uploading {{ uploadingName() }}…</p>
+      <div class="progress-track">
+        <div class="progress-fill" [style.width.%]="progress()"></div>
+      </div>
+      <p class="progress-label">{{ progress() }}%</p>
+    } @else {
+      <p class="dz-title">Drop a file here or <span class="browse">browse</span></p>
+      <p class="dz-hint">
+        bytes → <b>MinIO</b> · metadata → <b>PostgreSQL</b> · list cache invalidated → <b>Redis</b>
+      </p>
+    }
+  </section>
+
+  <!-- ── Metrics ────────────────────────────────────────────────────── -->
+  <section class="metrics">
+    <div class="section-head">
+      <h2>Live metrics</h2>
+      @if (metrics(); as m) {
+        <span class="count-chip">updated {{ relativeTime(m.generated_at) }}</span>
+      }
+      <button class="refresh" (click)="showTables.set(!showTables())"
+              [attr.aria-pressed]="showTables()">
+        {{ showTables() ? 'Show charts' : 'Show data as tables' }}
+      </button>
+    </div>
+
+    <div class="chart-grid">
+      <!-- Uploads over time: one series, one hue, no legend. -->
+      <article class="chart-card wide">
+        <div class="chart-head">
+          <h3>Uploads per day</h3>
+          <p class="chart-sub">last {{ uploadsChart().bars.length }} days · {{ uploadsChart().total }} total</p>
+        </div>
+
+        @if (showTables()) {
+          <div class="table-wrap">
+            <table>
+              <caption class="visually-hidden">Uploads per day</caption>
+              <thead>
+                <tr><th scope="col">Day</th><th scope="col">Files</th><th scope="col">Bytes</th></tr>
+              </thead>
+              <tbody>
+                @for (b of uploadsChart().bars; track b.day) {
+                  <tr>
+                    <td>{{ b.tick }}</td>
+                    <td class="num">{{ b.count }}</td>
+                    <td class="num">{{ formatBytes(b.bytes) }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        } @else if (uploadsChart().empty) {
+          <p class="chart-empty">No uploads in this window yet.</p>
+        } @else {
+          <div class="chart-plot">
+            <svg [attr.viewBox]="'0 0 ' + uploadsChart().W + ' ' + uploadsChart().H"
+                 class="chart-svg" role="img"
+                 [attr.aria-label]="'Uploads per day, ' + uploadsChart().total + ' files over ' + uploadsChart().bars.length + ' days'">
+              <!-- Solid hairline grid, one step off the surface. Never dashed. -->
+              @for (g of uploadsChart().grid; track g.value) {
+                <line class="grid" [attr.x1]="uploadsChart().padL" [attr.x2]="uploadsChart().W - 10"
+                      [attr.y1]="g.y" [attr.y2]="g.y" />
+                <text class="axis" [attr.x]="uploadsChart().padL - 8" [attr.y]="g.y"
+                      text-anchor="end" dominant-baseline="middle">{{ g.value }}</text>
+              }
+
+              @for (b of uploadsChart().bars; track b.day) {
+                @if (b.h > 0.5) {
+                  <path class="bar" [attr.d]="b.path" />
+                }
+                @if (b.peak) {
+                  <text class="bar-label" [attr.x]="b.cx" [attr.y]="b.y - 6" text-anchor="middle">{{ b.count }}</text>
+                }
+                @if (b.showTick) {
+                  <text class="axis" [attr.x]="b.cx"
+                        [attr.y]="uploadsChart().padT + uploadsChart().plotH + 15"
+                        text-anchor="middle">{{ b.tick }}</text>
+                }
+                <!-- Hit target wider and taller than the mark, and focusable:
+                     keyboard shows exactly what hover shows. -->
+                <rect class="hit" [attr.x]="b.x - 8" [attr.y]="b.hitY"
+                      [attr.width]="b.w + 16" [attr.height]="b.hitH"
+                      tabindex="0" role="button"
+                      [attr.aria-label]="b.tick + ': ' + b.count + ' uploads'"
+                      (mouseenter)="showTip($event, b.tick, b.count + (b.count === 1 ? ' upload' : ' uploads'))"
+                      (focus)="showTip($event, b.tick, b.count + (b.count === 1 ? ' upload' : ' uploads'))"
+                      (mouseleave)="hideTip()" (blur)="hideTip()" />
+              }
+            </svg>
+
+            @if (tip(); as t) {
+              <div class="tip" [style.left.px]="t.x" [style.top.px]="t.y" role="tooltip">
+                <span class="tip-label">{{ t.label }}</span>
+                <span class="tip-value">{{ t.value }}</span>
+              </div>
+            }
+          </div>
+        }
+      </article>
+
+      <!-- Storage by type: nominal categories, so one colour for every bar.
+           A darker-where-bigger ramp would double-encode the length. -->
+      <article class="chart-card">
+        <div class="chart-head">
+          <h3>Storage by type</h3>
+          <p class="chart-sub">bytes in MinIO, by content type</p>
+        </div>
+
+        @if (typeBars().length === 0) {
+          <p class="chart-empty">Nothing stored yet.</p>
+        } @else if (showTables()) {
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th scope="col">Type</th><th scope="col">Files</th><th scope="col">Size</th></tr>
+              </thead>
+              <tbody>
+                @for (t of typeBars(); track t.kind) {
+                  <tr>
+                    <td>{{ t.kind }}</td>
+                    <td class="num">{{ t.count }}</td>
+                    <td class="num">{{ formatBytes(t.bytes) }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        } @else {
+          <ul class="hbars">
+            @for (t of typeBars(); track t.kind) {
+              <li class="hbar-row">
+                <span class="hbar-key">{{ t.kind }}</span>
+                <span class="hbar-track">
+                  <span class="hbar-fill" [style.width.%]="t.pct"></span>
+                </span>
+                <span class="hbar-value">{{ formatBytes(t.bytes) }}</span>
+              </li>
+            }
+          </ul>
+        }
+      </article>
+
+      <!-- Most downloaded: counts read live from Redis. -->
+      <article class="chart-card">
+        <div class="chart-head">
+          <h3>Most downloaded</h3>
+          <p class="chart-sub">live counters from Redis</p>
+        </div>
+
+        @if (topBars().length === 0) {
+          <p class="chart-empty">No downloads yet. Grab a file to move the counter.</p>
+        } @else if (showTables()) {
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th scope="col">File</th><th scope="col">Downloads</th></tr>
+              </thead>
+              <tbody>
+                @for (d of topBars(); track d.id) {
+                  <tr><td class="ellipsis">{{ d.filename }}</td><td class="num">{{ d.downloads }}</td></tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        } @else {
+          <ul class="hbars">
+            @for (d of topBars(); track d.id) {
+              <li class="hbar-row">
+                <span class="hbar-key" [title]="d.filename">{{ d.filename }}</span>
+                <span class="hbar-track">
+                  <span class="hbar-fill" [style.width.%]="d.pct"></span>
+                </span>
+                <span class="hbar-value">{{ d.downloads }}</span>
+              </li>
+            }
+          </ul>
+        }
+      </article>
+
+      <!-- Not a chart: a handful of facts is a table. -->
+      <article class="chart-card wide">
+        <div class="chart-head">
+          <h3>Inside the services</h3>
+          <p class="chart-sub">read straight from each one, every {{ (metrics()?.downloads?.flush_interval_seconds ?? 5) }}s</p>
+        </div>
+
+        @if (metrics(); as m) {
+          <div class="facts">
+            <div class="fact-col">
+              <h4 class="fact-svc pg">PostgreSQL</h4>
+              <div class="fact"><span class="fact-k">Version</span><span class="fact-v">{{ m.services.postgres.version }}</span></div>
+              <div class="fact"><span class="fact-k">Database size</span><span class="fact-v">{{ formatBytes(m.services.postgres.database_size_bytes) }}</span></div>
+              <div class="fact"><span class="fact-k">Rows in files</span><span class="fact-v">{{ m.services.postgres.file_rows }}</span></div>
+              <div class="fact"><span class="fact-k">Counters pending flush</span><span class="fact-v">{{ m.downloads.pending_flush }}</span></div>
+            </div>
+
+            <div class="fact-col">
+              <h4 class="fact-svc rd">Redis</h4>
+              <div class="fact"><span class="fact-k">Version</span><span class="fact-v">{{ m.services.redis.version }}</span></div>
+              <div class="fact"><span class="fact-k">Memory used</span><span class="fact-v">{{ m.services.redis.used_memory_human }}</span></div>
+              <div class="fact"><span class="fact-k">Keys</span><span class="fact-v">{{ m.services.redis.keys }}</span></div>
+              <div class="fact"><span class="fact-k">Connected clients</span><span class="fact-v">{{ m.services.redis.connected_clients }}</span></div>
+              <div class="fact"><span class="fact-k">Uptime</span><span class="fact-v">{{ formatDuration(m.services.redis.uptime_seconds) }}</span></div>
+            </div>
+
+            <div class="fact-col">
+              <h4 class="fact-svc mi">MinIO</h4>
+              <div class="fact"><span class="fact-k">Bucket</span><span class="fact-v">{{ m.services.minio.bucket }}</span></div>
+              <div class="fact"><span class="fact-k">Endpoint</span><span class="fact-v">{{ m.services.minio.endpoint }}</span></div>
+              <div class="fact"><span class="fact-k">Objects</span><span class="fact-v">{{ m.services.minio.objects }}</span></div>
+              <div class="fact"><span class="fact-k">Bytes held</span><span class="fact-v">{{ formatBytes(m.services.minio.bytes) }}</span></div>
+            </div>
+          </div>
+
+          @if (storageDrift() !== 0) {
+            <p class="fact-warn">
+              <span class="warn-icon" aria-hidden="true">!</span>
+              MinIO holds {{ storageDrift() }} more object(s) than Postgres has rows.
+            </p>
+          }
+        } @else {
+          <p class="chart-empty">Reading…</p>
+        }
+      </article>
+    </div>
+  </section>
+
+  <!-- ── Files ──────────────────────────────────────────────────────── -->
+  <section>
+    <div class="section-head">
+      <h2>Files</h2>
+      <span class="count-chip">{{ files().length }}</span>
+      <button class="refresh" (click)="loadFiles()" aria-label="Refresh file list">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+          <path d="M21 3v6h-6" />
+        </svg>
+        Refresh
+      </button>
+    </div>
+
+    <div class="file-list">
+      @for (f of files(); track f.id) {
+        <article class="file-row">
+          <div class="kind" [attr.data-kind]="kindOf(f)" aria-hidden="true">{{ kindOf(f) }}</div>
+
+          <div class="file-meta">
+            <span class="file-name" [title]="f.filename">{{ f.filename }}</span>
+            <span class="file-sub" [title]="f.uploaded_at">
+              {{ formatBytes(f.size_bytes) }} · {{ f.content_type }} · {{ relativeTime(f.uploaded_at) }}
+            </span>
+          </div>
+
+          <span class="dl-count" title="Download count (live from Redis, mirrored to Postgres)">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 4v12m0 0l-5-5m5 5l5-5" />
+              <path d="M5 20h14" />
+            </svg>
+            {{ f.download_count }}
+          </span>
+
+          <div class="actions">
+            <a class="icon-btn" [href]="API + '/files/' + f.id + '/download'" download
+               (click)="onDownload()" title="Download" aria-label="Download {{ f.filename }}">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 4v12m0 0l-5-5m5 5l5-5" />
+                <path d="M5 20h14" />
+              </svg>
+            </a>
+            @if (confirmingId() === f.id) {
+              <button class="icon-btn confirm" (click)="remove(f)">Sure?</button>
+            } @else {
+              <button class="icon-btn danger" (click)="askRemove(f)" title="Delete"
+                      aria-label="Delete {{ f.filename }}">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 7h16M10 11v6m4-6v6M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
+                  <path d="M9 7V4h6v3" />
+                </svg>
+              </button>
+            }
+          </div>
+        </article>
+      } @empty {
+        <div class="empty">
+          <div class="glyph" aria-hidden="true">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 8l3-4h12l3 4v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              <path d="M3 8h18M10 12h4" />
+            </svg>
+          </div>
+          <p class="em-title">The vault is empty</p>
+          <p>Upload a file to put all three services to work.</p>
+        </div>
+      }
+    </div>
+  </section>
+
+  <footer>
+    Streams through <a href="/docs" target="_blank" rel="noopener">FastAPI</a>
+    · MinIO console on <a href="http://localhost:9001" target="_blank" rel="noopener">:9001</a>
+  </footer>
+</main>
+
+<!-- ── Toasts ───────────────────────────────────────────────────────── -->
+<div class="toasts" aria-live="polite">
+  @for (t of toasts(); track t.id) {
+    <div class="toast" [class.err]="t.kind === 'err'">{{ t.text }}</div>
+  }
+</div>

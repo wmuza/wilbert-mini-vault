@@ -1,0 +1,90 @@
+# One command brings up the whole stack:  docker compose up --build
+#
+# Compose puts every service on a private network where the service names
+# below (postgres, redis, minio) double as DNS hostnames. That is why the
+# api's environment points at postgres:5432 instead of localhost:5432.
+
+services:
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"        # http://localhost:8000  (Angular UI + API, /docs for Swagger)
+    environment:
+      DATABASE_URL: postgresql+psycopg2://vault:vault@postgres:5432/vault
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: uploads
+      CACHE_TTL_SECONDS: "${CACHE_TTL_SECONDS:-30}"
+      # How often Redis download counters are mirrored to Postgres. Override it to
+      # widen the write-behind window when demoing the lag:
+      #   COUNTER_FLUSH_SECONDS=30 docker compose up -d
+      COUNTER_FLUSH_SECONDS: "${COUNTER_FLUSH_SECONDS:-5}"
+      METRICS_HISTORY_DAYS: "${METRICS_HISTORY_DAYS:-14}"   # width of the uploads chart
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vault
+      POSTGRES_PASSWORD: vault
+      POSTGRES_DB: vault
+    ports:
+      - "5433:5432"        # 5433 on the host because a local Postgres already uses 5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vault -d vault"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    # Append-only file: every write is journalled, so a restart replays them
+    # instead of starting empty. Postgres is still the durable home of the
+    # download counters, but this keeps the in-flight ones (and the cache
+    # stats, which live only here) across a `docker compose restart`.
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9002:9000"        # S3 API (9002 on the host; 9000 is taken by another local service)
+      - "9001:9001"        # web console: http://localhost:9001 (minioadmin/minioadmin)
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      # If your minio image lacks curl, swap for: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+# Named volumes so data survives `docker compose down`.
+# Wipe everything with: docker compose down -v
+volumes:
+  pgdata:
+  miniodata:
+  redisdata:
